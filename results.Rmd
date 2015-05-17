@@ -1,0 +1,105 @@
+---
+title: "Student Math Performance"
+output: html_document
+---
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(ggthemr)
+ggthemr('flat')
+mat_perf = read.csv('student-mat.csv', sep = ';')
+summary(mat_perf)
+```
+
+You can also embed plots, for example:
+
+```{r, echo=FALSE, warning = FALSE}
+ggplot(mat_perf) + geom_histogram(aes(x=absences))
+ggplot(mat_perf) + geom_histogram(aes(x=G1), binwidth=2)
+ggplot(mat_perf) + geom_histogram(aes(x=G2), binwidth=2)
+ggplot(mat_perf) + geom_histogram(aes(x=G3), binwidth=2)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+test.stats = list(test.type = c(), test.value = c(), variable = c())
+
+for (i in 1:30) {
+  if (is.factor(mat_perf[,i])) {
+    anova = summary(aov(G3 ~ mat_perf[,i], data=mat_perf))
+    test.stats$test.type[i] = "F test"
+    test.stats$test.value[i] = unlist(anova)[7]
+    test.stats$variable[i] = names(mat_perf)[i]
+  }
+  else {
+    reg = summary(lm(G3 ~ mat_perf[,i], data=mat_perf))
+    test.stats$test.type[i] = "t test"
+    test.stats$test.value[i] = reg$coefficients[2,3]
+    test.stats$variable[i] = names(mat_perf)[i]
+  }
+    
+}
+
+test.stats.df = arrange(data.frame(test.stats), desc(test.value))
+test.stats.df$variable = reorder(test.stats.df$variable, -test.stats.df$test.value)
+```
+
+Univariate estimates variable importance
+
+```{r, echo=FALSE, fig.width=12, fig.height=5, warning=FALSE}
+ggplot(test.stats.df, aes(x=variable, y=test.value)) + geom_bar(stat="identity") + facet_grid(.~test.type ,  scales="free", space = "free") + theme(axis.text.x = element_text(angle = 45, vjust=.75, size=11))
+```
+
+Training a random forest model using only the predictors with the highest univariate test values
+```{r, message=FALSE, warning=FALSE}
+keep.vars = match(filter(test.stats.df, abs(test.value) >= 3)$variable, names(mat_perf))
+library(caret)
+ctrl = trainControl(method="repeatedcv", number=10, selectionFunction = "oneSE")
+#in_train = createDataPartition(mat_perf$G3, p=.67, groups = 2)
+mat_perf$randu = runif(395)
+#mat_perf$G3.scaled = scale(mat_perf$G3)
+trf = train(mat_perf[mat_perf$randu <= .67,keep.vars], mat_perf$G3[mat_perf$randu <= .67],
+            method="rf", metric="RMSE", data=mat_perf,
+            trControl=ctrl, importance=TRUE)
+trf
+varImp(trf)
+test = mat_perf[mat_perf$randu > .67,]
+test$pred.G3.keepvars = predict(trf, test, "raw")
+ggplot(test, aes(x=G3, y=pred.G3.keepvars)) + geom_point() + stat_smooth()
+ggplot(test, aes(x=G3, y=pred.G3.keepvars-G3)) + geom_point() + stat_smooth() + ggtitle('Residuals')
+```
+
+This model had an r squared value of `r cor.test(test$G3, test$pred.G3.keepvars)$estimate[[1]]^2` and an RMSE of `r summary(lm(test$G3 ~ test$pred.G3.keepvars))$sigma`.
+
+Training a random forest model using all predictors except the prior 2 test scores
+```{r, message=FALSE, warning=FALSE}
+trf2 = train(mat_perf[mat_perf$randu <= .67,1:30], mat_perf$G3[mat_perf$randu <= .67],
+            method="rf", metric="RMSE", data=mat_perf,
+            trControl=ctrl, importance=TRUE)
+trf2
+varImp(trf2)
+test$pred.g3.almostallvars = predict(trf2, test, "raw")
+ggplot(test, aes(x=G3, y=pred.g3.almostallvars)) + geom_point() + stat_smooth()
+ggplot(test, aes(x=G3, y=pred.g3.almostallvars-G3)) + geom_point() + stat_smooth() + ggtitle('Residuals')
+```
+
+This model had an r squared value of `r cor.test(test$G3, test$pred.g3.almostallvars)$estimate[[1]]^2` and an RMSE of `r summary(lm(test$G3 ~ test$pred.g3.almostallvars))$sigma`.
+
+```{r, message=FALSE, warning=FALSE}
+trf3 = train(mat_perf[mat_perf$randu <= .67,c(1:30,32)], mat_perf$G3[mat_perf$randu <= .67],
+            method="rf", metric="RMSE", data=mat_perf,
+            trControl=ctrl, importance=TRUE)
+trf3
+varImp(trf3)
+test$pred.g3.plusG2 = predict(trf3, test, "raw")
+ggplot(test, aes(x=G3, y=pred.g3.plusG2)) + geom_point() + stat_smooth()
+ggplot(test, aes(x=G3, y=pred.g3.plusG2-G3)) + geom_point() + stat_smooth() + ggtitle('Residuals')
+```
+
+This model had an r squared value of `r cor.test(test$G3, test$pred.g3.plusG2)$estimate[[1]]^2` and an RMSE of `r summary(lm(test$G3 ~ test$pred.g3.plusG2))$sigma`.
